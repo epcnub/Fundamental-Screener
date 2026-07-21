@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NSE Fundamental Screener</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="header-left">
+      <h1>📈 NSE Fundamental Screener</h1>
+      <span class="subtitle">Automated fundamental analysis · Powered by Screener.in</span>
+    </div>
+    <div class="header-right">
+      <button id="btn-export" class="btn btn-ghost" disabled>⬇ Export CSV</button>
+      <button id="btn-run" class="btn btn-primary">▶ Run Screener</button>
+    </div>
+  </header>
+
+  <!-- CONTROLS BAR -->
+  <div class="controls-bar">
+    <div class="control-group">
+      <label>Universe</label>
+      <select id="sel-universe">
+        <option value="nifty50">Nifty 50</option>
+        <option value="custom">Custom symbols</option>
+        <option value="all">All NSE (~2000 stocks)</option>
+      </select>
+    </div>
+    <div class="control-group" id="custom-input-wrap" style="display:none">
+      <label>Symbols (comma separated)</label>
+      <input type="text" id="custom-symbols" placeholder="INFY, TCS, RELIANCE" />
+    </div>
+    <div class="control-group">
+      <label>Filter grade</label>
+      <select id="sel-grade">
+        <option value="">All grades</option>
+        <option value="A">A only</option>
+        <option value="A,B">A & B</option>
+        <option value="C">C only</option>
+        <option value="D,F">D & F (avoid)</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Red flags</label>
+      <select id="sel-flags">
+        <option value="">All stocks</option>
+        <option value="flagged">Flagged only</option>
+        <option value="clean">Clean only</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Search</label>
+      <input type="text" id="search-box" placeholder="Symbol or company…" />
+    </div>
+  </div>
+
+  <!-- STATS BAR -->
+  <div class="stats-bar" id="stats-bar" style="display:none">
+    <div class="stat-card">
+      <div class="stat-val" id="stat-total">—</div>
+      <div class="stat-lbl">Stocks screened</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val" id="stat-avg">—</div>
+      <div class="stat-lbl">Avg score</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val grade-A" id="stat-a">—</div>
+      <div class="stat-lbl">Grade A</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val grade-B" id="stat-b">—</div>
+      <div class="stat-lbl">Grade B</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val grade-F" id="stat-f">—</div>
+      <div class="stat-lbl">Grade F</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val flag-count" id="stat-flags">—</div>
+      <div class="stat-lbl">Red flagged</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-val best" id="stat-best">—</div>
+      <div class="stat-lbl">Best stock</div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <main>
+
+    <!-- EMPTY STATE -->
+    <div class="empty-state" id="empty-state">
+      <div class="empty-icon">📊</div>
+      <h2>No data yet</h2>
+      <p>Select a universe and click <strong>Run Screener</strong> to start the analysis.</p>
+      <p class="hint">Nifty 50 takes ~75 seconds · All NSE stocks takes ~35–50 minutes</p>
+    </div>
+
+    <!-- LOADING STATE -->
+    <div class="loading-state" id="loading-state" style="display:none">
+      <div class="spinner"></div>
+      <h2 id="loading-text">Fetching fundamentals…</h2>
+      <p id="loading-hint">Scraping Screener.in with a 1.2s polite delay between requests.</p>
+    </div>
+
+    <!-- RESULTS -->
+    <div id="results-wrap" style="display:none">
+
+      <!-- TABS -->
+      <div class="tabs">
+        <button class="tab active" data-tab="table">📋 Ranked Table</button>
+        <button class="tab" data-tab="flags">🚩 Red Flag Report</button>
+        <button class="tab" data-tab="grades">🏅 Grade Distribution</button>
+      </div>
+
+      <!-- TAB: RANKED TABLE -->
+      <div class="tab-content active" id="tab-table">
+        <div class="table-wrap">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th class="sortable" data-col="rank">#</th>
+                <th class="sortable" data-col="symbol">Symbol</th>
+                <th>Company</th>
+                <th class="sortable" data-col="score">Score</th>
+                <th class="sortable" data-col="grade">Grade</th>
+                <th class="sortable" data-col="roe">ROE %</th>
+                <th class="sortable" data-col="roce">ROCE %</th>
+                <th class="sortable" data-col="pe_ratio">P/E</th>
+                <th class="sortable" data-col="pb_ratio">P/B</th>
+                <th class="sortable" data-col="de_ratio">D/E</th>
+                <th class="sortable" data-col="revenue_cagr_3y">Rev CAGR 3Y</th>
+                <th class="sortable" data-col="profit_cagr_3y">PAT CAGR 3Y</th>
+                <th class="sortable" data-col="promoter_holding_pct">Promoter %</th>
+                <th>Red Flags</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- TAB: RED FLAGS -->
+      <div class="tab-content" id="tab-flags" style="display:none">
+        <div id="flags-container"></div>
+      </div>
+
+      <!-- TAB: GRADE DISTRIBUTION -->
+      <div class="tab-content" id="tab-grades" style="display:none">
+        <div id="grade-chart-wrap">
+          <div class="grade-bars" id="grade-bars"></div>
+        </div>
+      </div>
+
+    </div><!-- /results-wrap -->
+  </main>
+
+  <!-- DETAIL MODAL -->
+  <div class="modal-overlay" id="modal-overlay" style="display:none">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h2 id="modal-title">—</h2>
+          <span id="modal-subtitle" class="modal-sub">—</span>
+        </div>
+        <button class="modal-close" id="modal-close">✕</button>
+      </div>
+      <div class="modal-score-row">
+        <div class="modal-score-box">
+          <div class="modal-score-val" id="modal-score">—</div>
+          <div class="modal-score-lbl">Score / 100</div>
+        </div>
+        <div class="modal-score-box">
+          <div class="modal-grade-val" id="modal-grade">—</div>
+          <div class="modal-score-lbl">Grade</div>
+        </div>
+      </div>
+      <div id="modal-breakdown"></div>
+      <div id="modal-flags-wrap"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
