@@ -93,12 +93,10 @@ btnRun.addEventListener("click", async () => {
     if (!raw) { alert("Enter at least one symbol."); return; }
     symbols = raw.split(/[\s,]+/).map(s => s.trim().toUpperCase()).filter(Boolean);
   }
-  // "all" → symbols = null → backend fetches full NSE list
 
   const estSecs = symbols ? symbols.length * 1.3 : 2000 * 1.3;
   const estMins = Math.ceil(estSecs / 60);
 
-  // Show loading
   emptyState.style.display    = "none";
   resultsWrap.style.display   = "none";
   statsBar.style.display      = "none";
@@ -110,15 +108,30 @@ btnRun.addEventListener("click", async () => {
   btnExport.disabled = true;
 
   try {
-    const resp = await fetch("/api/run", {
+    // 1. Kick off the background job
+    const startResp = await fetch("/api/run", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbols }),
     });
-    const data = await resp.json();
+    const startData = await startResp.json();
+
+    if (startData.status === "already_running") {
+      alert("A screener run is already in progress. Please wait for it to finish.");
+      btnRun.disabled = false;
+      return;
+    }
+
+    // 2. Poll /api/status until done
+    await pollUntilDone();
+
+    // 3. Fetch the finished results
+    const reportResp = await fetch("/api/report");
+    const data = await reportResp.json();
     allRows = data.rows || [];
     renderAll(data.stats || {});
     btnExport.disabled = false;
+
   } catch (err) {
     loadingState.style.display = "none";
     emptyState.style.display   = "block";
@@ -127,6 +140,29 @@ btnRun.addEventListener("click", async () => {
     btnRun.disabled = false;
   }
 });
+
+function pollUntilDone() {
+  return new Promise((resolve, reject) => {
+    const interval = setInterval(async () => {
+      try {
+        const resp = await fetch("/api/status");
+        const status = await resp.json();
+
+        if (status.total > 0) {
+          loadingText.textContent = `Fetching fundamentals… (${status.progress} / ${status.total})`;
+        }
+
+        if (!status.running) {
+          clearInterval(interval);
+          resolve();
+        }
+      } catch (err) {
+        clearInterval(interval);
+        reject(err);
+      }
+    }, 2000); // poll every 2 seconds
+  });
+}
 
 // ── Export ─────────────────────────────────────────────────
 btnExport.addEventListener("click", async () => {
