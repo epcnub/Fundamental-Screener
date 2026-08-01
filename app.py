@@ -18,9 +18,6 @@ from universe import get_screener_symbols, get_name_map
 from report   import export_csv
 
 app = Flask(__name__)
-@app.route("/")
-def home():
-    return "Hello"
 
 # In-memory cache so re-visiting the page doesn't re-fetch
 _cache: dict = {}   # { "results": [...], "data_map": {...} }
