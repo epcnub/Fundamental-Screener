@@ -7,6 +7,7 @@ Then open:  http://stockscreener.in
 import sys
 import os
 import json
+import threading
 from pathlib import Path
 from flask import Flask, render_template, jsonify, request
 
@@ -20,22 +21,10 @@ from report   import export_csv
 app = Flask(__name__)
 
 # In-memory cache so re-visiting the page doesn't re-fetch
-_cache: dict = {}   # { "results": [...], "data_map": {...} }
+_cache: dict = {}   # { "rows": [...], "stats": {...}, "data_map": {...}, "results": [...] }
 
-
-def _run_screener(symbols: list[str]) -> tuple[list, dict]:
-    name_map    = get_name_map()
-    all_data    = {}
-    all_results = []
-
-    for sym in symbols:
-        print(f"  Fetching {sym}...")
-        data   = fetch_fundamentals(sym, delay=1.2)
-        result = score_stock(data)
-        all_data[sym] = data
-        all_results.append(result)
-
-    return all_results, all_data
+# Background job status
+_job_status: dict = {"running": False, "progress": 0, "total": 0}
 
 
 def _result_to_dict(result: dict, data: dict, name_map: dict, rank: int) -> dict:
@@ -87,6 +76,55 @@ def _result_to_dict(result: dict, data: dict, name_map: dict, rank: int) -> dict
     }
 
 
+def _run_screener_background(symbols: list[str]):
+    """Runs in a background thread so the HTTP request doesn't have to wait."""
+    global _cache, _job_status
+    _job_status.update({"running": True, "progress": 0, "total": len(symbols)})
+
+    name_map    = get_name_map()
+    all_data    = {}
+    all_results = []
+
+    for i, sym in enumerate(symbols, 1):
+        print(f"  Fetching {sym}...")
+        data   = fetch_fundamentals(sym, delay=1.2)
+        result = score_stock(data)
+        all_data[sym] = data
+        all_results.append(result)
+        _job_status["progress"] = i
+
+    ranked = sorted(
+        [r for r in all_results if not r.get("fetch_error")],
+        key=lambda x: -(x.get("score") or 0)
+    )
+    errors = [r for r in all_results if r.get("fetch_error")]
+
+    rows = []
+    for rank, result in enumerate(ranked + errors, 1):
+        d = all_data.get(result["symbol"], {})
+        rows.append(_result_to_dict(result, d, name_map, rank))
+
+    # Stats
+    scored = [r for r in all_results if r.get("score") is not None]
+    stats  = {}
+    if scored:
+        scores = [r["score"] for r in scored]
+        stats = {
+            "total":   len(all_results),
+            "avg":     round(sum(scores) / len(scores), 1),
+            "best":    max(scored, key=lambda x: x["score"])["symbol"],
+            "worst":   min(scored, key=lambda x: x["score"])["symbol"],
+            "grade_counts": {
+                g: sum(1 for r in scored if r.get("grade") == g)
+                for g in ["A", "B", "C", "D", "F"]
+            },
+            "flagged": sum(1 for r in all_results if r.get("red_flags")),
+        }
+
+    _cache = {"rows": rows, "stats": stats, "data_map": all_data, "results": all_results}
+    _job_status["running"] = False
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -96,46 +134,24 @@ def index():
 
 @app.route("/api/run", methods=["POST"])
 def api_run():
-    """Start a screener run. Body: { "symbols": ["INFY", ...] } or empty for full universe."""
-    global _cache
+    """Start a screener run in the background. Body: { "symbols": ["INFY", ...] } or empty for full universe."""
+    if _job_status["running"]:
+        return jsonify({"status": "already_running"}), 409
+
     body    = request.get_json(silent=True) or {}
     symbols = body.get("symbols") or get_screener_symbols()
 
-    print(f"\n[Screener] Running on {len(symbols)} stocks...")
-    results, data_map = _run_screener(symbols)
+    print(f"\n[Screener] Starting run on {len(symbols)} stocks...")
+    thread = threading.Thread(target=_run_screener_background, args=(symbols,), daemon=True)
+    thread.start()
 
-    name_map = get_name_map()
-    ranked   = sorted(
-        [r for r in results if not r.get("fetch_error")],
-        key=lambda x: -(x.get("score") or 0)
-    )
-    errors = [r for r in results if r.get("fetch_error")]
+    return jsonify({"status": "started", "total": len(symbols)})
 
-    rows = []
-    for rank, result in enumerate(ranked + errors, 1):
-        d = data_map.get(result["symbol"], {})
-        rows.append(_result_to_dict(result, d, name_map, rank))
 
-    _cache = {"rows": rows, "data_map": data_map, "results": results}
-
-    # Stats
-    scored = [r for r in results if r.get("score") is not None]
-    stats  = {}
-    if scored:
-        scores = [r["score"] for r in scored]
-        stats = {
-            "total":   len(results),
-            "avg":     round(sum(scores) / len(scores), 1),
-            "best":    max(scored, key=lambda x: x["score"])["symbol"],
-            "worst":   min(scored, key=lambda x: x["score"])["symbol"],
-            "grade_counts": {
-                g: sum(1 for r in scored if r.get("grade") == g)
-                for g in ["A", "B", "C", "D", "F"]
-            },
-            "flagged": sum(1 for r in results if r.get("red_flags")),
-        }
-
-    return jsonify({"rows": rows, "stats": stats})
+@app.route("/api/status")
+def api_status():
+    """Poll this to check progress of the background run."""
+    return jsonify(_job_status)
 
 
 @app.route("/api/report")
@@ -143,7 +159,7 @@ def api_report():
     """Return cached results (or empty if not run yet)."""
     if not _cache:
         return jsonify({"rows": [], "stats": {}})
-    return jsonify({"rows": _cache.get("rows", []), "stats": {}})
+    return jsonify({"rows": _cache.get("rows", []), "stats": _cache.get("stats", {})})
 
 
 @app.route("/api/export")
